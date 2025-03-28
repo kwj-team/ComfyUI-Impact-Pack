@@ -249,6 +249,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSEGSOrderedFilter": SEGSOrderedFilter,
     "ImpactSEGSIntersectionFilter": SEGSIntersectionFilter,
     "ImpactSEGSNMSFilter": SEGSNMSFilter,
+    "SEGSFilterClosestMask": SEGSFilterClosestMask,
 
     "ImpactCompare": ImpactCompare,
     "ImpactConditionalBranch": ImpactConditionalBranch,
@@ -332,6 +333,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DetailerForEachPipeForAnimateDiff": "Detailer For AnimateDiff (SEGS/pipe)",
     "SEGSUpscaler": "Upscaler (SEGS)",
     "SEGSUpscalerPipe": "Upscaler (SEGS/pipe)",
+    "SEGSFilterClosestMask": "SEGS Filter (closest mask)",
 
     "SAMDetectorCombined": "SAMDetector (combined)",
     "SAMDetectorSegmented": "SAMDetector (segmented)",

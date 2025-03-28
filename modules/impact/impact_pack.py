@@ -2451,3 +2451,85 @@ class ImpactSchedulerAdapter:
 
         return (scheduler,)
 
+
+class SEGSFilterClosestMask:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "segs": ("SEGS",),
+                    "mask": ("MASK",),
+                    "threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                },
+                "optional": {
+                    "return_all_scores": ("BOOLEAN", {"default": False}),
+                }
+               }
+
+    RETURN_TYPES = ("SEGS", "FLOAT")
+    RETURN_NAMES = ("filtered_segs", "overlap_score")
+    OUTPUT_IS_LIST = (False, False)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Operation"
+
+    DESCRIPTION = "Filters SEGS to find the segment with the highest overlap with the provided mask. Returns the best matching SEG and its overlap score."
+
+    def doit(self, segs, mask, threshold=0.0, return_all_scores=False):
+        if len(segs[1]) == 0:
+            return segs, 0.0
+        
+        # Convert mask to 2D if needed
+        mask = core.make_2d_mask(mask)
+        mask_np = mask.cpu().numpy()
+        
+        best_seg = None
+        best_score = -1
+        all_scores = []
+        
+        # Calculate shape for result
+        result_shape = segs[0]
+        result_segs = []
+        
+        for seg in segs[1]:
+            # Create a full-size mask from the segment
+            seg_mask = np.zeros((result_shape[0], result_shape[1]), dtype=np.float32)
+            x1, y1, x2, y2 = seg.crop_region
+            
+            # Place the cropped mask in the full-size mask
+            if isinstance(seg.cropped_mask, torch.Tensor):
+                cropped_mask = seg.cropped_mask.cpu().numpy()
+            else:
+                cropped_mask = seg.cropped_mask
+                
+            # Handle batch masks (take the max across batch dimension)
+            if len(cropped_mask.shape) == 3:
+                cropped_mask = np.max(cropped_mask, axis=0)
+                
+            seg_mask[y1:y2, x1:x2] = cropped_mask
+            
+            # Calculate intersection and union
+            intersection = np.sum(np.logical_and(seg_mask > 0, mask_np > 0))
+            union = np.sum(np.logical_or(seg_mask > 0, mask_np > 0))
+            
+            # Calculate IoU (Intersection over Union) or just intersection ratio
+            if union > 0:
+                overlap_score = intersection / union
+            else:
+                overlap_score = 0.0
+                
+            all_scores.append(overlap_score)
+            
+            # Update best match if this score is higher
+            if overlap_score > best_score:
+                best_score = overlap_score
+                best_seg = seg
+        
+        # Only include the best segment if it meets the threshold
+        if best_seg is not None and best_score >= threshold:
+            result_segs.append(best_seg)
+            
+        if return_all_scores:
+            print(f"Overlap scores for all segments: {all_scores}")
+            
+        return (result_shape, result_segs), best_score
+
