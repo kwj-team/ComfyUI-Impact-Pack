@@ -92,10 +92,21 @@ class CLIPSegDetectorProvider:
             print("[ERROR] CLIPSegToBboxDetector: CLIPSeg custom node isn't installed. You must install biegert/ComfyUI-CLIPSeg extension to use this node.")
 
 
+sam2_config_table = {
+    'sam2.1_hiera_base_plus.pt': 'configs/sam2.1/sam2.1_hiera_b+.yaml',
+    'sam2.1_hiera_large.pt': 'configs/sam2.1/sam2.1_hiera_l.yaml',
+    'sam2.1_hiera_small.pt': 'configs/sam2.1/sam2.1_hiera_s.yaml',
+    'sam2.1_hiera_tiny.pt': 'configs/sam2.1/sam2.1_hiera_t.yaml',
+    'sam2_hiera_tiny.pt': 'configs/sam2/sam2_hiera_t.yaml',
+    'sam2_hiera_small.pt': 'configs/sam2/sam2_hiera_s.yaml',
+    'sam2_hiera_base_plus.pt': 'configs/sam2/sam2_hiera_b+.yaml',
+    'sam2_hiera_large.pt': 'configs/sam2/sam2_hiera_l.yaml'
+}
+
 class SAMLoader:
     @classmethod
     def INPUT_TYPES(cls):
-        models = [x for x in folder_paths.get_filename_list("sams") if 'hq' not in x]
+        models = [x for x in folder_paths.get_filename_list("sams") if 'hq' not in x and (x.endswith('.pt') or x.endswith('.pth') or x.endswith('.safetensors'))]
 
         if 'ESAM_ModelLoader_Zho' in nodes.NODE_CLASS_MAPPINGS:
             models.append('ESAM')
@@ -136,17 +147,22 @@ class SAMLoader:
             
             print(f"Loads EfficientSAM model: (device:{device_mode})")
             return (esam, )
-
-        modelname = folder_paths.get_full_path("sams", model_name)
-
-        if 'vit_h' in model_name:
-            model_kind = 'vit_h'
-        elif 'vit_l' in model_name:
-            model_kind = 'vit_l'
+        elif model_name in sam2_config_table:
+            model_kind = 'sam2'
+            config = sam2_config_table[model_name]
+            modelname = folder_paths.get_full_path("sams", model_name)
         else:
-            model_kind = 'vit_b'
+            modelname = folder_paths.get_full_path("sams", model_name)
 
-        sam = sam_model_registry[model_kind](checkpoint=modelname)
+            if 'vit_h' in model_name:
+                model_kind = 'vit_h'
+            elif 'vit_l' in model_name:
+                model_kind = 'vit_l'
+            else:
+                model_kind = 'vit_b'
+
+            sam = sam_model_registry[model_kind](checkpoint=modelname)
+
         size = os.path.getsize(modelname)
         safe_to = core.SafeToGPU(size)
 
@@ -158,10 +174,14 @@ class SAMLoader:
 
         is_auto_mode = device_mode == "AUTO"
 
-        sam_obj = core.SAMWrapper(sam, is_auto_mode=is_auto_mode, safe_to_gpu=safe_to)
-        sam.sam_wrapper = sam_obj
+        if model_kind == 'sam2':
+            sam = core.SAM2Wrapper(config=config, modelname=modelname, is_auto_mode=is_auto_mode, safe_to_gpu=safe_to, device_mode=device_mode)
+            print(f"Loads SAM2 model: {modelname} (device:{device_mode})")
+        else:
+            sam_obj = core.SAMWrapper(sam, is_auto_mode=is_auto_mode, safe_to_gpu=safe_to)
+            sam.sam_wrapper = sam_obj
+            print(f"Loads SAM model: {modelname} (device:{device_mode})")
 
-        print(f"Loads SAM model: {modelname} (device:{device_mode})")
         return (sam, )
 
 
@@ -808,6 +828,26 @@ class CoreMLDetailerHookProvider:
 
     def doit(self, mode):
         hook = hooks.CoreMLHook(mode)
+        return (hook, )
+
+
+class CustomSamplerDetailerHookProvider:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "sampler": ("SAMPLER", ),
+                    },
+                }
+
+    RETURN_TYPES = ("DETAILER_HOOK",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Detailer"
+    
+    DESCRIPTION = "Apply a hook that allows you to use a custom sampler in the Detailer nodes. When using `DetailerHookCombine`, the sampler from the first hook is applied."
+
+    def doit(self, sampler):
+        hook = hooks.CustomSamplerDetailerHookProvider(sampler)
         return (hook, )
 
 
@@ -1906,7 +1946,7 @@ class MaskRectArea:
         # search for node
         node_found = False
         for node in extra_pnginfo["workflow"]["nodes"]:
-            if node["id"] == int(unique_id):
+            if str(node["id"]) == unique_id:
                 min_x = node["properties"].get("x", 0) / 100
                 min_y = node["properties"].get("y", 0) / 100
                 width = node["properties"].get("w", 0) / 100
@@ -2435,7 +2475,7 @@ class ImpactSchedulerAdapter:
     def INPUT_TYPES(s):
         return {"required": {
             "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"defaultInput": True, }),
-            "extra_scheduler": (['None', 'AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]'],),
+            "extra_scheduler": (['None', 'AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]', 'OSS FLUX', 'OSS Wan'],),
         }}
 
     CATEGORY = "ImpactPack/Util"

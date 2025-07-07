@@ -67,6 +67,54 @@ def tensor_convert_rgb(image, prefer_copy=True):
     raise ValueError(f"illegal conversion (channels: {n_channel} -> 3)")
 
 
+def resize_with_padding(image, target_w: int, target_h: int):
+    _tensor_check_image(image)
+    b, h, w, c = image.shape
+    image = image.permute(0, 3, 1, 2)  # B, C, H, W
+
+    scale = min(target_w / w, target_h / h)
+    new_w, new_h = int(w * scale), int(h * scale)
+
+    image = F.interpolate(image, size=(new_h, new_w), mode="bilinear", align_corners=False)
+
+    pad_left = (target_w - new_w) // 2
+    pad_right = target_w - new_w - pad_left
+    pad_top = (target_h - new_h) // 2
+    pad_bottom = target_h - new_h - pad_top
+
+    image = F.pad(image, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
+
+    image = image.permute(0, 2, 3, 1)  # B, H, W, C
+    return image, (pad_top, pad_bottom, pad_left, pad_right)
+
+
+def remove_padding(image, padding):
+    pad_top, pad_bottom, pad_left, pad_right = padding
+    return image[:, pad_top:image.shape[1] - pad_bottom, pad_left:image.shape[2] - pad_right, :]
+
+
+def adjust_bbox_after_resize(bbox, original_size, target_size, padding):
+    """
+    bbox: (x1, y1, x2, y2) in original image
+    original_size: (original_h, original_w)
+    target_size: (target_h, target_w)
+    padding: (pad_top, pad_bottom, pad_left, pad_right)
+    """
+    orig_h, orig_w = original_size
+    target_h, target_w = target_size
+    pad_top, pad_bottom, pad_left, pad_right = padding
+
+    scale = min(target_w / orig_w, target_h / orig_h)
+
+    # Apply scale
+    x1 = int(bbox[0] * scale + pad_left)
+    y1 = int(bbox[1] * scale + pad_top)
+    x2 = int(bbox[2] * scale + pad_left)
+    y2 = int(bbox[3] * scale + pad_top)
+
+    return x1, y1, x2, y2
+
+
 def general_tensor_resize(image, w: int, h: int):
     _tensor_check_image(image)
     image = image.permute(0, 3, 1, 2)
@@ -178,31 +226,71 @@ def tensor2numpy(image):
 
 
 def tensor_paste(image1, image2, left_top, mask):
-    """Mask and image2 has to be the same size"""
+    """
+    Pastes image2 onto image1 at position left_top using mask.
+    Supports both RGB and RGBA images.
+    """
     _tensor_check_image(image1)
     _tensor_check_image(image2)
     _tensor_check_mask(mask)
+    
     if image2.shape[1:3] != mask.shape[1:3]:
         mask = resize_mask(mask.squeeze(dim=3), image2.shape[1:3]).unsqueeze(dim=3)
-        # raise ValueError(f"Inconsistent size: Image ({image2.shape[1:3]}) != Mask ({mask.shape[1:3]})")
-
+    
     x, y = left_top
-    _, h1, w1, _ = image1.shape
-    _, h2, w2, _ = image2.shape
-
-    # calculate image patch size
+    _, h1, w1, c1 = image1.shape
+    _, h2, w2, c2 = image2.shape
+    
+    # Calculate image patch size
     w = min(w1, x + w2) - x
     h = min(h1, y + h2) - y
-
+    
     # If the patch is out of bound, nothing to do!
     if w <= 0 or h <= 0:
         return
-
+    
     mask = mask[:, :h, :w, :]
-    image1[:, y:y+h, x:x+w, :] = (
-        (1 - mask) * image1[:, y:y+h, x:x+w, :] +
-        mask * image2[:, :h, :w, :]
-    )
+    
+    # Get the region to be modified
+    region1 = image1[:, y:y+h, x:x+w, :]
+    region2 = image2[:, :h, :w, :]
+    
+    # Handle RGB and RGBA cases
+    if c1 == 3 and c2 == 3:
+        # Both RGB - simple case
+        image1[:, y:y+h, x:x+w, :] = (1 - mask) * region1 + mask * region2
+    
+    elif c1 == 4 and c2 == 4:
+        # Both RGBA - need to handle alpha channel separately
+        # RGB channels
+        image1[:, y:y+h, x:x+w, :3] = (
+            (1 - mask) * region1[:, :, :, :3] +
+            mask * region2[:, :, :, :3]
+        )
+        
+        # Alpha channel - use "over" composition
+        a1 = region1[:, :, :, 3:4]
+        a2 = region2[:, :, :, 3:4] * mask
+        new_alpha = a1 + a2 * (1 - a1)
+        image1[:, y:y+h, x:x+w, 3:4] = new_alpha
+    
+    elif c1 == 4 and c2 == 3:
+        # Target is RGBA, source is RGB - assume source is fully opaque
+        image1[:, y:y+h, x:x+w, :3] = (
+            (1 - mask) * region1[:, :, :, :3] +
+            mask * region2
+        )
+        # Alpha channel - reduce alpha where mask is applied
+        image1[:, y:y+h, x:x+w, 3:4] = region1[:, :, :, 3:4] * (1 - mask) + mask
+    
+    elif c1 == 3 and c2 == 4:
+        # Target is RGB, source is RGBA - apply source alpha to mask
+        effective_mask = mask * region2[:, :, :, 3:4]
+        image1[:, y:y+h, x:x+w, :] = (
+            (1 - effective_mask) * region1 +
+            effective_mask * region2[:, :, :, :3]
+        )
+    
     return
 
 
